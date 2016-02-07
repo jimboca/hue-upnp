@@ -283,7 +283,7 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
 
                 if "description.xml" in data:
                         self.request.sendall(DESCRIPTION_XML)
-                        L.info("hueUpnp: {} Sent HTTP description.xml Response".format(client))
+                        L.info("hueUpnp: {} Sent description.xml response".format(client))
 
                 elif "hue_logo_0.png" in data:
                         self.request.sendall(ICON_HEADERS)
@@ -297,7 +297,6 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                         resp = "\n{"
                         i = 1
                         for device in CONFIG.devices:
-                                # TODO: Force update of device? dst = device.st()
                                 resp += "\"%d\":" % (i)
                                 resp += self.get_onelight_json(device)
                                 if i < len(CONFIG.devices):
@@ -305,6 +304,7 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                                 i += 1
                         resp += "}\n"
                         self.send_json(resp)
+                        L.info("hueUpnp: {}: Sent all lights response".format(client))
 
                 #PUT instruction to do something
                 #Example (hue3-light-off):
@@ -381,6 +381,7 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                         # TODO: Force update of device? dst = device.st()
                         OneResp = self.get_onelight_json(device)
                         self.send_json(OneResp)
+                        L.info("hueUpnp: {}: Sent state of {}".format(client,device.name))
 
                 #Assuming this is a new device registration or config request
                 elif "GET /api/" in data:
