@@ -135,10 +135,12 @@ ICON_BIG = "iVBORw0KGgoAAAANSUhEUgAAAHgAAAB4CAYAAAA5ZDbSAAAAB3RJTUUH3AgNBw4nVfRr
 
 
 class Broadcaster(Thread):
-        interrupted = False
+        interrupted = True
         def run(self):
                 self.interrupted = False
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                #Issue9: Force broadcasts over configured interface
+                sock.bind((CONFIG.standard['IP'],0))
                 sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 20)
 
                 while True:
@@ -156,7 +158,7 @@ class Broadcaster(Thread):
                 return not self.interrupted
 
 class Responder(Thread):
-        interrupted = False
+        interrupted = True
         def run(self):
                 self.interrupted = False
 #               sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -169,6 +171,11 @@ class Responder(Thread):
                 sock.bind(('', CONFIG.standard['UPNP_PORT']))
                 mreq = struct.pack("4sl", socket.inet_aton(CONFIG.standard['BCAST_IP']), socket.INADDR_ANY)
                 sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
+                #Issue 9: create separate response socket bound to assigned interface
+                sockresp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                sockresp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sockresp.bind((CONFIG.standard['IP'], CONFIG.standard['UPNP_PORT']))
 
                 sock.settimeout(1)
                 while True:
@@ -205,9 +212,10 @@ class Responder(Thread):
                                                         CONFIG.standard['HTTP_PORT'],
                                                         "urn:schemas-upnp-org:device:basic:1",
                                                         CONFIG.standard['SERIALNO'])
-                                                
-                                                sock.sendto(resp, addr)
+
+                                                sockresp.sendto(resp, addr)
                                                 L.info("hueUpnp: Response to basic sent: "+resp)
+
                                         elif "upnp:rootdevice" in data:
                                                 L.debug("hueUpnp: received upnp:rootdevice")
                                                 resp = UPNP_RESPOND_TEMPLATE.format(
@@ -216,8 +224,9 @@ class Responder(Thread):
                                                         "upnp:rootdevice",
                                                         CONFIG.standard['SERIALNO']
                                                 )
-                                                sock.sendto(resp, addr)
+                                                sockresp.sendto(resp, addr)
                                                 L.info("hueUpnp: Response to rootdevice sent: "+resp)
+
                                         elif "ssdp:all" in data:
                                                 L.debug("hueUpnp: received ssdp:all responding with upnp:rootdevice")
                                                 resp = UPNP_RESPOND_TEMPLATE.format(
@@ -226,8 +235,9 @@ class Responder(Thread):
                                                         "upnp:rootdevice",
                                                         CONFIG.standard['SERIALNO']
                                                 )
-                                                sock.sendto(resp, addr)
+                                                sockresp.sendto(resp, addr)
                                                 L.info("hueUpnp: Response to ssdp:all sent: "+resp)
+
                                         else:
                                                 L.debug("hueUpnp: ignoring")
                                         L.debug("hueUpnp: ----------------------")
@@ -251,6 +261,8 @@ class Httpd(Thread):
         def run(self):
                 try:
                         L.info("hueUpnp: Starting HTTP server for {}:{}".format(CONFIG.standard['IP'],CONFIG.standard['HTTP_PORT']))
+                        #Issue 11: testing reuse when TIME_WAITs exist
+                        SocketServer.ThreadingTCPServer.allow_reuse_address = True
                         self.server = SocketServer.ThreadingTCPServer((CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT']), HttpdRequestHandler)
                         self.server.allow_reuse_address = True
                         self.server.serve_forever()
@@ -543,7 +555,7 @@ class hue_upnp_helper_handler(hue_upnp_super_handler):
                 p = subprocess.Popen([self.program, self.name, "bri", str(value)])
                 p.communicate() #wait to complete
                 return not p.returncode
-                
+
         def set_ct(self,value):
                 # Use external program to do "stuff" if desired
                 L.debug("Running: {} {} ct {}".format(self.program, self.name, value))
@@ -615,14 +627,14 @@ class hue_upnp(object):
                 self.broadcaster = Broadcaster()
                 self.httpd = Httpd()
         
-        def start(config):
-                L.info("hueUpnp: Server starting")
-                self.responder.start()
-                self.broadcaster.start()
-                self.httpd.start()
 
-        def run(config):
-                self.start()
+        def run(self, listen=True):
+                self.listen = listen
+                L.info("hueUpnp: Server starting listen=" + str(listen))
+                if self.listen:
+                        self.responder.start()
+                        self.broadcaster.start()
+                self.httpd.start()
                 L.info("hueUpnp: Server running")
                 try:
                         while True:
