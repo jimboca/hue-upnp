@@ -202,7 +202,7 @@ class Responder(Thread):
                                                         CONFIG.standard['SERIALNO'])
                                                 
                                                 sock.sendto(resp, addr)
-                                                L.info("hueUpnp: Response sent: "+resp)
+                                                L.info("hueUpnp: Response to basic sent: "+resp)
                                         elif "upnp:rootdevice" in data:
                                                 L.debug("hueUpnp: received upnp:rootdevice")
                                                 resp = UPNP_RESPOND_TEMPLATE.format(
@@ -212,7 +212,7 @@ class Responder(Thread):
                                                         CONFIG.standard['SERIALNO']
                                                 )
                                                 sock.sendto(resp, addr)
-                                                L.info("hueUpnp: Response sent: "+resp)
+                                                L.info("hueUpnp: Response to rootdevice sent: "+resp)
                                         elif "ssdp:all" in data:
                                                 L.debug("hueUpnp: received ssdp:all responding with upnp:rootdevice")
                                                 resp = UPNP_RESPOND_TEMPLATE.format(
@@ -222,7 +222,7 @@ class Responder(Thread):
                                                         CONFIG.standard['SERIALNO']
                                                 )
                                                 sock.sendto(resp, addr)
-                                                L.info("hueUpnp: Response sent: "+resp)
+                                                L.info("hueUpnp: Response to ssdp:all sent: "+resp)
                                         else:
                                                 L.debug("hueUpnp: ignoring")
                                         L.debug("hueUpnp: ----------------------")
