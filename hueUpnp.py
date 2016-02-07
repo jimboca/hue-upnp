@@ -623,8 +623,6 @@ class hue_upnp(object):
                 UPNP_BROADCAST  = UPNP_BROADCAST.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'],CONFIG.standard['SERIALNO'])
                 DESCRIPTION_XML = DESCRIPTION_XML.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'], CONFIG.standard['IP'], CONFIG.standard['SERIALNO'], CONFIG.standard['SERIALNO'])
                 APICONFIG_JSON  = APICONFIG_JSON % (CONFIG.standard['MACADDRESS'])
-                self.responder = Responder()
-                self.broadcaster = Broadcaster()
                 self.httpd = Httpd()
         
 
@@ -632,8 +630,7 @@ class hue_upnp(object):
                 self.listen = listen
                 L.info("hueUpnp: Server starting listen=" + str(listen))
                 if self.listen:
-                        self.responder.start()
-                        self.broadcaster.start()
+                        self.start_listener()
                 self.httpd.start()
                 L.info("hueUpnp: Server running")
                 try:
@@ -649,6 +646,17 @@ class hue_upnp(object):
                         self.broadcaster.stop()
                         self.httpd.stop()
 
+        def start_listener(self):
+                self.responder = Responder()
+                self.broadcaster = Broadcaster()
+                self.responder.start()
+                self.broadcaster.start()
+
+        def stop_listener(self):
+                self.responder.stop()
+                self.broadcaster.stop()
+
+                
 if __name__ == '__main__':
 
         import hueUpnp_config
