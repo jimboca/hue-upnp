@@ -137,6 +137,7 @@ ICON_BIG = "iVBORw0KGgoAAAANSUhEUgAAAHgAAAB4CAYAAAA5ZDbSAAAAB3RJTUUH3AgNBw4nVfRr
 class Broadcaster(Thread):
         interrupted = False
         def run(self):
+                self.interrupted = False
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
                 sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 20)
 
@@ -151,9 +152,13 @@ class Broadcaster(Thread):
         def stop(self):
                 self.interrupted = True
 
+        def active(self):
+                return not self.interrupted
+
 class Responder(Thread):
         interrupted = False
         def run(self):
+                self.interrupted = False
 #               sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 #               sock.bind((IP, UPNP_PORT))
 #               sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(BCAST_IP) + socket.inet_aton(IP));
@@ -230,6 +235,10 @@ class Responder(Thread):
 
         def stop(self):
                 self.interrupted = True
+
+        def active(self):
+                return not self.interrupted
+
 
 #don't want to make a new socket--need to reuse same port
 #Switch def respond(self, addr):
@@ -591,34 +600,42 @@ class isy_rest_handler(hue_upnp_super_handler):
                         return True
                 return False
 
-def run(config):
-        global L,CONFIG,UPNP_BROADCAST,DESCRIPTION_XML,APICONFIG_JSON
-        L      = config.logger
-        CONFIG = config
-        CONFIG.standard['SERIALNO'] = re.sub(':','',CONFIG.standard['MACADDRESS']) # same as the MACADDRESS with colons removed
-        # Put our info in the responses
-        UPNP_BROADCAST  = UPNP_BROADCAST.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'],CONFIG.standard['SERIALNO'])
-        DESCRIPTION_XML = DESCRIPTION_XML.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'], CONFIG.standard['IP'], CONFIG.standard['SERIALNO'], CONFIG.standard['SERIALNO'])
-        APICONFIG_JSON  = APICONFIG_JSON % (CONFIG.standard['MACADDRESS'])
-        L.info("hueUpnp: Server starting")
+class hue_upnp(object):
+        def __init__(self, config):
+                global L,CONFIG,UPNP_BROADCAST,DESCRIPTION_XML,APICONFIG_JSON
+                L      = config.logger
+                L.info("hueUpnp: Server initializing")
+                CONFIG = config
+                CONFIG.standard['SERIALNO'] = re.sub(':','',CONFIG.standard['MACADDRESS']) # same as the MACADDRESS with colons removed
+                # Put our info in the responses
+                UPNP_BROADCAST  = UPNP_BROADCAST.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'],CONFIG.standard['SERIALNO'])
+                DESCRIPTION_XML = DESCRIPTION_XML.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'], CONFIG.standard['IP'], CONFIG.standard['SERIALNO'], CONFIG.standard['SERIALNO'])
+                APICONFIG_JSON  = APICONFIG_JSON % (CONFIG.standard['MACADDRESS'])
+                self.responder = Responder()
+                self.broadcaster = Broadcaster()
+                self.httpd = Httpd()
+        
+        def start(config):
+                L.info("hueUpnp: Server starting")
+                self.responder.start()
+                self.broadcaster.start()
+                self.httpd.start()
 
-        responder = Responder()
-        broadcaster = Broadcaster()
-        httpd = Httpd()
-        responder.start()
-        broadcaster.start()
-        httpd.start()
-        try:
-                while True:
-                        responder.join(1)
-                        broadcaster.join(1)
-                        httpd.join(1)
-        except (KeyboardInterrupt, SystemExit):
-                L.info("hueUpnp: Waiting for connections to end before exiting")
-                responder.stop()
-                broadcaster.stop()
-                httpd.stop()
-
+        def run(config):
+                self.start()
+                L.info("hueUpnp: Server running")
+                try:
+                        while True:
+                                if self.responder.active():
+                                        self.responder.join(1)
+                                if self.broadcaster.active():
+                                        self.broadcaster.join(1)
+                                self.httpd.join(1)
+                except (KeyboardInterrupt, SystemExit):
+                        L.info("hueUpnp: Waiting for connections to end before exiting")
+                        self.responder.stop()
+                        self.broadcaster.stop()
+                        self.httpd.stop()
 
 if __name__ == '__main__':
 
@@ -660,4 +677,5 @@ if __name__ == '__main__':
         hueUpnp_config.devices = devices
         hueUpnp_config.logger  = logger
 
-        run(hueUpnp_config);
+        hueupnp = hue_upnp(hueUpnp_config);
+        hueupnp.run();
