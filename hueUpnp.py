@@ -6,11 +6,13 @@
 #   sudo apt-get install python-pip
 #   sudo pip install requests
 
-import socket, struct, email.utils, time, SocketServer, re, subprocess, sys, logging, logging.handlers, thread
+import socket, struct, email.utils, time, SocketServer, re, subprocess, sys, logging, logging.handlers, thread, uuid
 from threading import Thread
 import requests
 from requests.auth import HTTPDigestAuth,HTTPBasicAuth
 import json
+
+username = {}
 
 L = False
 
@@ -28,12 +30,16 @@ USN: uuid:2f402f80-da50-11e1-9b23-{}::upnp:rootdevice
 """.replace("\n", "\r\n")
 
 
-#IP, PORT, ST
+#IP, PORT,
+#HuePublicConfig.createConfig("temp", responseAddress).getBridgeid()
+#ST
 UPNP_RESPOND_TEMPLATE = """HTTP/1.1 200 OK
-CACHE-CONTROL: max-age=100
+HOST: 239.255.255.250:1900
+CACHE-CONTROL: max-age=86400
 EXT:
 LOCATION: http://{}:{}/description.xml
-SERVER: FreeRTOS/6.0.5, UPnP/1.0, IpBridge/0.1
+SERVER: FreeRTOS/7.4.2 UPnP/1.0 IpBridge/1.10.0
+hue-bridgeid: {}
 ST: {}
 USN: uuid:2f402f80-da50-11e1-9b23-{}::upnp:rootdevice
 
@@ -105,9 +111,10 @@ APICONFIG_JSON = """
 [{"swversion":"01008227","apiversion":"1.2.1","name":"Smartbridge 1","mac":"%s",}]
 """
 
+# TODO: someuser should be generate a new user name?
 NEWDEVELOPERSYNC_JSON = """
-[{"success":{"%s":""}}]
-""" % ("username")
+[{"success":{"%s":"%s"}}]
+"""
 
 #example template values: "success", "1", "on", "true"
 PUTRESP_TEMPLATE_JSON = """
@@ -210,6 +217,7 @@ class Responder(Thread):
                                                 resp = UPNP_RESPOND_TEMPLATE.format(
                                                         CONFIG.standard['IP'],
                                                         CONFIG.standard['HTTP_PORT'],
+                                                        CONFIG.standard['BRIDGEID'],
                                                         "urn:schemas-upnp-org:device:basic:1",
                                                         CONFIG.standard['SERIALNO'])
 
@@ -221,6 +229,7 @@ class Responder(Thread):
                                                 resp = UPNP_RESPOND_TEMPLATE.format(
                                                         CONFIG.standard['IP'],
                                                         CONFIG.standard['HTTP_PORT'],
+                                                        CONFIG.standard['BRIDGEID'],
                                                         "upnp:rootdevice",
                                                         CONFIG.standard['SERIALNO']
                                                 )
@@ -232,6 +241,7 @@ class Responder(Thread):
                                                 resp = UPNP_RESPOND_TEMPLATE.format(
                                                         CONFIG.standard['IP'],
                                                         CONFIG.standard['HTTP_PORT'],
+                                                        CONFIG.standard['BRIDGEID'],
                                                         "upnp:rootdevice",
                                                         CONFIG.standard['SERIALNO']
                                                 )
@@ -258,6 +268,7 @@ class Responder(Thread):
 #               print "Response sent"
 
 class Httpd(Thread):
+        
         def run(self):
                 try:
                         L.info("hueUpnp: Starting HTTP server for {}:{}".format(CONFIG.standard['IP'],CONFIG.standard['HTTP_PORT']))
@@ -274,6 +285,10 @@ class Httpd(Thread):
                 self.server.shutdown()
 
 class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
+        def debug(self,client,str):
+                #if (client == "192.168.1.151"):
+                        L.debug(str)
+                        
         def handle(self):
                 global json
                 client = self.client_address[0]
@@ -295,12 +310,12 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                 if searchObj and int(searchObj.group(1)) > 0:
                         contentLength = int(searchObj.group(1))
                         headerLength = data.find("\r\n\r\n") + 4
-                        L.debug("hueUpnp: Header-Length={} Content-Length={}".format(headerLength,contentLength))
+                        self.debug(client,"hueUpnp: Header-Length={} Content-Length={}".format(headerLength,contentLength))
                         #got the header--now grab the remaining content if any
                         if len(data) < headerLength + contentLength:
                                 data += self.request.recv(headerLength + contentLength - len(data))
 
-                L.debug("hueUpnp: {}: HTTP Request: {}".format(client,data.strip()))
+                self.debug(client,"hueUpnp: {}: HTTP Request: {}".format(client,data.strip()))
 
                 if "description.xml" in data:
                         self.request.sendall(DESCRIPTION_XML)
@@ -340,7 +355,7 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                         matchObj = re.match( r'PUT /api/(.*)lights/(\d+)/state', data, re.I)
                         #if "/lights/" in data and "/state" in data:
                         if matchObj:
-                                L.debug("hueUpnp: {} Got PUT request to do something".format(client))
+                                self.debug(client,"hueUpnp: {} Got PUT request to do something".format(client))
                                 # reqId is what Alexa passes, the match will include the trailing / for now.
                                 reqId    =  matchObj.group(1)
                                 reqHueNo =  matchObj.group(2)
@@ -348,9 +363,9 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                                 # Examples:
                                 #   Harmony: {"on":true,"bri":254}
                                 #   Echo: {"on": true}
-                                L.debug("hueUpnp: %s Content data=---\n%s\n---" % (client, data[-contentLength:]))
+                                self.debug(client,"hueUpnp: %s Content data=---\n%s\n---" % (client, data[-contentLength:]))
                                 parsedContent = json.loads(data[-contentLength:])
-                                L.debug("hueUpnp: %s Parsed Content data=---\n%s\n---" % (client, str(parsedContent)))
+                                self.debug(client,"hueUpnp: %s Parsed Content data=---\n%s\n---" % (client, str(parsedContent)))
                                 #
                                 # Check that we understand the request data
                                 #
@@ -374,7 +389,7 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                                 #
                                 deviceNum = int(reqHueNo) - 1
                                 # TODO: Check that device number is valid.
-                                L.debug("device number:%d" % deviceNum)
+                                self.debug(client,"device number:%d" % deviceNum)
                                 dst = CONFIG.devices[deviceNum].set(parsedContent)
                                 # Build the proper response
                                 if dst:
@@ -431,16 +446,25 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                                 L.info("hueUpnp: {} Sent HTTP New Dev Response".format(client))
 
                 #I only saw a POST when registering the username
-                elif "POST /api/" in data:
-                        #time.sleep(1)  #I don't think we need to have a delay
-                        self.send_json(NEWDEVELOPERSYNC_JSON)
-                        L.info("hueUpnp: {} Sent HTTP New Dev Sync Response".format(client))
+                # Previously was "POST /api/ but Google Home doesn't have the trailing slash?
+                elif "POST /api" in data:
+                        # Google Home seems to make multiple requests, so if we already gave one?
+                        if client in username:
+                                resp = "HTTP/1.1 404 Not Found"
+                                L.info("hueUpnp: {} Already assigned user {} Sent: {}".format(client,username[client],resp))
+                                self.request.sendall(resp)
+                        else:
+                                username[client] = str(uuid.uuid4())
+                                self.send_json(NEWDEVELOPERSYNC_JSON % ("username",username[client]))
+                                L.info("hueUpnp: {} Sent HTTP New Dev Sync Response".format(client))
 
                 else:
-                        self.request.sendall("HTTP/1.1 404 Not Found")
+                        resp = "HTTP/1.1 404 Not Found"
+                        L.info("hueUpnp: {} Sent: {}".format(client,resp))
+                        self.request.sendall(resp)
 
-                L.debug("hueUpnp: -------------------------------")
-                L.debug("hueUpnp:     ")
+                self.debug(client,"hueUpnp: -------------------------------")
+                self.debug(client,"hueUpnp:     ")
 
         def get_onelight_json(self,device):
                 #example template values: "on", "[0.0,0.0]", "Hue Lamp 1", "254", "201"
@@ -452,7 +476,7 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                 date_str = email.utils.formatdate(timeval=None, localtime=False, usegmt=True)
                 full_resp = (JSON_HEADERS % (len(resp), date_str, resp)).replace("\n", "\r\n")
                 self.request.sendall(full_resp)
-                L.debug("hueUpnp: {} Sent HTTP Put Response:\n{}".format(self.client_address[0],full_resp))
+                self.debug(self.client_address[0],"hueUpnp: {} Sent HTTP Put Response:\n{}".format(self.client_address[0],full_resp))
 
 #
 # This is the main object which all other handlers inherit from:
@@ -619,12 +643,16 @@ class hue_upnp(object):
                 L.info("hueUpnp: Server initializing")
                 CONFIG = config
                 CONFIG.standard['SERIALNO'] = re.sub(':','',CONFIG.standard['MACADDRESS']) # same as the MACADDRESS with colons removed
+                # TODO: Needs to be unique based on SERIALNO and IP Address?
+                CONFIG.standard['BRIDGEID'] = "001788FFFE09A206"
+                CONFIG.standard['SERIALNO'] = "00178809A206"
                 # Put our info in the responses
                 UPNP_BROADCAST  = UPNP_BROADCAST.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'],CONFIG.standard['SERIALNO'])
                 DESCRIPTION_XML = DESCRIPTION_XML.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'], CONFIG.standard['IP'], CONFIG.standard['SERIALNO'], CONFIG.standard['SERIALNO'])
                 APICONFIG_JSON  = APICONFIG_JSON % (CONFIG.standard['MACADDRESS'])
                 self.httpd = Httpd()
-        
+                self.responder = False
+                self.broadcaster = False
 
         def run(self, listen=True):
                 self.listen = listen
@@ -635,9 +663,9 @@ class hue_upnp(object):
                 L.info("hueUpnp: Server running")
                 try:
                         while True:
-                                if self.responder.active():
+                                if self.responder and self.responder.active():
                                         self.responder.join(1)
-                                if self.broadcaster.active():
+                                if self.broadcaster and self.broadcaster.active():
                                         self.broadcaster.join(1)
                                 self.httpd.join(1)
                 except (KeyboardInterrupt, SystemExit):
