@@ -6,7 +6,8 @@
 #   sudo apt-get install python-pip
 #   sudo pip install requests
 
-import socket, struct, email.utils, time, SocketServer, re, subprocess, sys, logging, logging.handlers, thread, uuid
+# FIXME: Was importing thread for thread.interrupt_main
+import socket, struct, email.utils, time, socketserver, re, subprocess, sys, logging, logging.handlers, uuid, _thread
 from threading import Thread
 import requests
 from requests.auth import HTTPDigestAuth,HTTPBasicAuth
@@ -22,10 +23,11 @@ UPNP_BROADCAST = """NOTIFY * HTTP/1.1
 HOST: 239.255.255.250:1900
 CACHE-CONTROL: max-age=100
 LOCATION: http://{}:{}/description.xml
-SERVER: FreeRTOS/6.0.5, UPnP/1.0, IpBridge/0.1
+SERVER: Linux/3.14.0 UPnP/1.0 IpBridge/1.20.0
 NTS: ssdp:alive
-NT: upnp:rootdevice
-USN: uuid:2f402f80-da50-11e1-9b23-{}::upnp:rootdevice
+hue-bridgeid: {}
+NT: uuid:2f402f80-da50-11e1-9b23-{}
+USN: uuid:2f402f80-da50-11e1-9b23-{}
 
 """.replace("\n", "\r\n")
 
@@ -33,12 +35,16 @@ USN: uuid:2f402f80-da50-11e1-9b23-{}::upnp:rootdevice
 #IP, PORT,
 #HuePublicConfig.createConfig("temp", responseAddress).getBridgeid()
 #ST
+# From diyHueu
+#    Response_message = 'HTTP/1.1 200 OK\r\nHOST: 239.255.255.250:1900\r\nEXT:\r\nCACHE-CONTROL: max-age=100\r\nLOCATION: http://' + getIpAddress() + ':80/description.xml\r\n
+#                        SERVER: Linux/3.14.0 UPnP/1.0 IpBridge/1.20.0\r\nhue-bridgeid: ' + (mac[:6] + 'FFFE' + mac[6:]).upper() + '\r\n'
+
 UPNP_RESPOND_TEMPLATE = """HTTP/1.1 200 OK
 HOST: 239.255.255.250:1900
-CACHE-CONTROL: max-age=86400
 EXT:
+CACHE-CONTROL: max-age=100
 LOCATION: http://{}:{}/description.xml
-SERVER: FreeRTOS/7.4.2 UPnP/1.0 IpBridge/1.10.0
+SERVER: Linux/3.14.0 UPnP/1.0 IpBridge/1.20.0
 hue-bridgeid: {}
 ST: {}
 USN: uuid:2f402f80-da50-11e1-9b23-{}::upnp:rootdevice
@@ -145,13 +151,19 @@ class Broadcaster(Thread):
         interrupted = True
         def run(self):
                 self.interrupted = False
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                sock = False
                 #Issue9: Force broadcasts over configured interface
-                sock.bind((CONFIG.standard['IP'],0))
+                try:
+                    L.info("Creating Broadcaster for {}:0".format(CONFIG.standard['IP']))
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                    sock.bind((CONFIG.standard['IP'],0))
+                except socket.error as msg:
+                    L.error("hueUpnp: Broadcaster Socket Error: {}".format(msg))
+                    return False
                 sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 20)
 
                 while True:
-                        sock.sendto(UPNP_BROADCAST, (CONFIG.standard['BCAST_IP'], CONFIG.standard['UPNP_PORT']))
+                        sock.sendto(bytes(UPNP_BROADCAST,'UTF8'), (CONFIG.standard['BCAST_IP'], CONFIG.standard['UPNP_PORT']))
                         for x in range(CONFIG.standard['BROADCAST_INTERVAL']):
                                 time.sleep(1)
                                 if self.interrupted:
@@ -173,16 +185,22 @@ class Responder(Thread):
 #               sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(BCAST_IP) + socket.inet_aton(IP));
 
 #found this alternative method of binding in case there are other UPNP services running on port 1900
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.bind(('', CONFIG.standard['UPNP_PORT']))
-                mreq = struct.pack("4sl", socket.inet_aton(CONFIG.standard['BCAST_IP']), socket.INADDR_ANY)
-                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                sock = False
+                try:
+                    L.info("Creating Responder for port {}".format(CONFIG.standard['UPNP_PORT']))
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    sock.bind(('', CONFIG.standard['UPNP_PORT']))
+                    mreq = struct.pack("4sl", socket.inet_aton(CONFIG.standard['BCAST_IP']), socket.INADDR_ANY)
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
-                #Issue 9: create separate response socket bound to assigned interface
-                sockresp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-                sockresp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sockresp.bind((CONFIG.standard['IP'], CONFIG.standard['UPNP_PORT']))
+                    #Issue 9: create separate response socket bound to assigned interface
+                    sockresp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                    sockresp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    sockresp.bind((CONFIG.standard['IP'], CONFIG.standard['UPNP_PORT']))
+                except socket.error as msg:
+                    L.error("hueUpnp: Responder Socket Error: {}".format(msg))
+                    return False
 
                 sock.settimeout(1)
                 while True:
@@ -193,10 +211,9 @@ class Responder(Thread):
                                         sock.close()
                                         return
                         else:
-                                #L.debug("hueUpnp: \n-> debug received from {}\n{}\n<-\n".format(addr,data.strip()))
-                                if M_SEARCH_REQ_MATCH in data:
-                                        L.info("hueUpnp: received M-SEARCH from {}".format(addr))
-                                        #L.debug("hueUpnp:  data:\n{}".format(data.strip()))
+                                #L.debug("hueUpnp: -> debug received from {}\n{}\n<-\n".format(addr,data.strip()))
+                                if bytes(M_SEARCH_REQ_MATCH,'UTF8') in data:
+                                        L.debug("hueUpnp: received M-SEARCH from {}".format(addr))
 
                                         #Reply back with same ST or rootdevice for ssdp:all
                                         #20150920 - Conflicting data found online as to how the hue responds
@@ -212,7 +229,7 @@ class Responder(Thread):
                                         # bridgeid soon.  May need to update to account for this in the future:
                                         #http://www.developers.meethue.com/documentation/changes-bridge-discovery
 
-                                        if "urn:schemas-upnp-org:device:basic:1" in data:
+                                        if bytes("urn:schemas-upnp-org:device:basic:1",'UTF8') in data:
                                                 L.debug("hueUpnp: received urn:schemas-upnp-org:device:basic:1")
                                                 resp = UPNP_RESPOND_TEMPLATE.format(
                                                         CONFIG.standard['IP'],
@@ -221,10 +238,10 @@ class Responder(Thread):
                                                         "urn:schemas-upnp-org:device:basic:1",
                                                         CONFIG.standard['SERIALNO'])
 
-                                                sockresp.sendto(resp, addr)
-                                                L.info("hueUpnp: Response to basic sent: "+resp)
+                                                sock.sendto(bytes(resp,'UTF8'), addr)
+                                                L.debug("hueUpnp: Response to basic sent: "+resp)
 
-                                        elif "upnp:rootdevice" in data:
+                                        elif bytes("upnp:rootdevice",'UTF8') in data:
                                                 L.debug("hueUpnp: received upnp:rootdevice")
                                                 resp = UPNP_RESPOND_TEMPLATE.format(
                                                         CONFIG.standard['IP'],
@@ -233,10 +250,10 @@ class Responder(Thread):
                                                         "upnp:rootdevice",
                                                         CONFIG.standard['SERIALNO']
                                                 )
-                                                sockresp.sendto(resp, addr)
-                                                L.info("hueUpnp: Response to rootdevice sent: "+resp)
+                                                sock.sendto(bytes(resp,'UTF8'), addr)
+                                                L.debug("hueUpnp: Response to rootdevice sent: "+resp)
 
-                                        elif "ssdp:all" in data:
+                                        elif bytes("ssdp:all",'UTF8') in data or bytes("ssdp:discover",'UTF8') in data:
                                                 L.debug("hueUpnp: received ssdp:all responding with upnp:rootdevice")
                                                 resp = UPNP_RESPOND_TEMPLATE.format(
                                                         CONFIG.standard['IP'],
@@ -245,13 +262,11 @@ class Responder(Thread):
                                                         "upnp:rootdevice",
                                                         CONFIG.standard['SERIALNO']
                                                 )
-                                                sockresp.sendto(resp, addr)
-                                                L.info("hueUpnp: Response to ssdp:all sent: "+resp)
+                                                sock.sendto(bytes(resp,'UTF8'), addr)
+                                                L.debug("hueUpnp: Response to ssdp:all sent: "+resp)
 
                                         else:
-                                                L.debug("hueUpnp: ignoring")
-                                        L.debug("hueUpnp: ----------------------")
-                                        L.debug("hueUpnp:   ")
+                                                L.debug("hueUpnp: ignoring from {}\n{}\n<-\n".format(addr,data.strip()))
 
         def stop(self):
                 self.interrupted = True
@@ -268,31 +283,35 @@ class Responder(Thread):
 #               print "Response sent"
 
 class Httpd(Thread):
-        
+
         def run(self):
                 try:
                         L.info("hueUpnp: Starting HTTP server for {}:{}".format(CONFIG.standard['IP'],CONFIG.standard['HTTP_PORT']))
                         #Issue 11: testing reuse when TIME_WAITs exist
-                        SocketServer.ThreadingTCPServer.allow_reuse_address = True
-                        self.server = SocketServer.ThreadingTCPServer((CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT']), HttpdRequestHandler)
+                        socketserver.ThreadingTCPServer.allow_reuse_address = True
+                        self.server = socketserver.ThreadingTCPServer((CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT']), HttpdRequestHandler)
                         self.server.allow_reuse_address = True
                         self.server.serve_forever()
                 except socket.error as msg:
-                        L.info("hueUpnp: Http Socket Error: {}".format(msg))
-                        thread.interrupt_main()  #exiting program
+                        L.error("hueUpnp: Http Socket Error: {}".format(msg))
+                        _thread.interrupt_main()  #exiting program
 
         def stop(self):
                 self.server.shutdown()
 
-class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
+class HttpdRequestHandler(socketserver.BaseRequestHandler ):
         def debug(self,client,str):
                 #if (client == "192.168.1.151"):
-                        L.debug(str)
-                        
+                L.debug('hueUpnp:HTTP: {}: {}'.format(client,str))
+
+        def info(self,client,str):
+                #if (client == "192.168.1.151"):
+                L.info('hueUpnp:HTTP: {}: {}'.format(client,str))
+
         def handle(self):
                 global json
                 client = self.client_address[0]
-                L.info("hueUpnp: {}: reading http request".format(client))
+                self.debug(client,"reading http request")
                 data = self.request.recv(1024)
 
                 #all data isnt always sent right away--try a couple more times
@@ -302,34 +321,34 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                 # content-length is found and greater than 0
                 #2015-10: Header size is now computed to determine exactly how much
                 # data still needs to be pulled
-                if "\r\n\r\n" not in data:
+                if bytes("\r\n\r\n",'UTF8') not in data:
                         data += self.request.recv(1024) #try one more time
-                if "\r\n\r\n" not in data:
+                if bytes("\r\n\r\n",'UTF8') not in data:
                         data += self.request.recv(1024) #try one more time then give up
-                searchObj = re.search( r'content-length: (\d+)', data, re.I)
+                searchObj = re.search( r'content-length: (\d+)', str(data), re.I)
                 if searchObj and int(searchObj.group(1)) > 0:
                         contentLength = int(searchObj.group(1))
-                        headerLength = data.find("\r\n\r\n") + 4
-                        self.debug(client,"hueUpnp: Header-Length={} Content-Length={}".format(headerLength,contentLength))
-                        #got the header--now grab the remaining content if any
+                        headerLength = data.find(bytes("\r\n\r\n",'UTF8')) + 4
+                        self.debug(client,"Header-Length={} Content-Length={}".format(headerLength,contentLength))
+                        # got the header--now grab the remaining content if any
                         if len(data) < headerLength + contentLength:
                                 data += self.request.recv(headerLength + contentLength - len(data))
 
-                self.debug(client,"hueUpnp: {}: HTTP Request: {}".format(client,data.strip()))
+                self.debug(client,"Got: {}".format(data.strip()))
 
-                if "description.xml" in data:
-                        self.request.sendall(DESCRIPTION_XML)
-                        L.info("hueUpnp: {} Sent description.xml response".format(client))
+                if bytes("description.xml",'UTF8') in data:
+                        self.request.sendall(DESCRIPTION_XML.encode('utf-8'))
+                        self.info(client,"Sent description.xml response")
 
-                elif "hue_logo_0.png" in data:
-                        self.request.sendall(ICON_HEADERS)
+                elif bytes("hue_logo_0.png",'UTF8') in data:
+                        self.request.sendall(ICON_HEADERS.encode('utf-8'))
                         self.request.sendall(ICON_SMALL.decode('base64'))
-                elif "hue_logo_3.png" in data:
-                        self.request.sendall(ICON_HEADERS)
+                elif bytes("hue_logo_3.png",'UTF8') in data:
+                        self.request.sendall(ICON_HEADERS.encode('utf-8'))
                         self.request.sendall(ICON_BIG.decode('base64'))
 
                 #Request for all lights
-                elif re.match( r'GET /api/.*lights ', data, re.I):
+                elif re.match( r'GET /api/.*lights ', data.decode('utf-8'), re.I):
                         resp = "\n{"
                         i = 1
                         for device in CONFIG.devices:
@@ -340,7 +359,7 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                                 i += 1
                         resp += "}\n"
                         self.send_json(resp)
-                        L.info("hueUpnp: {}: Sent all lights response".format(client))
+                        self.info(client,"Sent all lights response")
 
                 #PUT instruction to do something
                 #Example (hue3-light-off):
@@ -351,8 +370,8 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                 #{"xy":[0.4617,0.4579]}  resp: [{"success":{"/lights/3/state/xy":[0.4617,0.4579]}}]
                 # or (multiple commands (on and bri) (only handle first item for now)
                 #{"on":true,"bri":254}   resp: [{"success":{"/lights/2/state/on":true}}]
-                elif "PUT /api/" in data:
-                        matchObj = re.match( r'PUT /api/(.*)lights/(\d+)/state', data, re.I)
+                elif bytes("PUT /api/",'UTF8') in data:
+                        matchObj = re.match( r'PUT /api/(.*)lights/(\d+)/state', data.decode('utf-8'), re.I)
                         #if "/lights/" in data and "/state" in data:
                         if matchObj:
                                 self.debug(client,"hueUpnp: {} Got PUT request to do something".format(client))
@@ -363,9 +382,9 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                                 # Examples:
                                 #   Harmony: {"on":true,"bri":254}
                                 #   Echo: {"on": true}
-                                self.debug(client,"hueUpnp: %s Content data=---\n%s\n---" % (client, data[-contentLength:]))
-                                parsedContent = json.loads(data[-contentLength:])
-                                self.debug(client,"hueUpnp: %s Parsed Content data=---\n%s\n---" % (client, str(parsedContent)))
+                                self.debug(client,"Content data=---\n%s\n---" % (data[-contentLength:]))
+                                parsedContent = json.loads(data[-contentLength:].decode('utf-8'))
+                                self.info(client,"Parsed Content data: %s" % (str(parsedContent)))
                                 #
                                 # Check that we understand the request data
                                 #
@@ -408,26 +427,26 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
                                 self.send_json("")
 
                 #Requesting the state of just one light
-                elif re.match( r'GET /api/.*lights/(\d+) ', data, re.I):
+                elif re.match( r'GET /api/.*lights/(\d+) ', data.decode('utf-8'), re.I):
                         reqHueNo = "1"
-                        matchObj = re.match( r'GET /api/.*lights/(\d+) ', data, re.I)
+                        matchObj = re.match( r'GET /api/.*lights/(\d+) ', data.decode('utf-8'), re.I)
                         if matchObj: reqHueNo = matchObj.group(1)
                         device_num = int(reqHueNo) - 1
                         device = CONFIG.devices[device_num]
                         # TODO: Force update of device? dst = device.st()
                         OneResp = self.get_onelight_json(device)
                         self.send_json(OneResp)
-                        L.info("hueUpnp: {}: Sent state of {}".format(client,device.name))
+                        self.info(client,"Sent state of {}".format(device.name))
 
                 #Assuming this is a new device registration or config request
-                elif "GET /api/" in data:
-                        if "/config" in data:
+                elif bytes("GET /api/",'UTF8') in data:
+                        if bytes("/config",'UTF8') in data:
                                 L.info("hueUpnp: {} Got request for /config".format(client))
                                 self.send_json(APICONFIG_JSON)
                                 L.info("hueUpnp: {} Sent API Config".format(client))
                         else:
                                 newDev = "newdeveloper"
-                                matchObj = re.match( r'GET /api/(.+) ', data, re.I)
+                                matchObj = re.match( r'GET /api/(.+) ', data.decode('utf-8'), re.I)
                                 if matchObj: newDev = matchObj.group(1)
                                 L.info("hueUpnp: {} Got request for new dev: {}".format(client,newDev))
                                 json_resp = NEWDEVELOPER_JSON = """{"lights":{"""
@@ -443,25 +462,25 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
 
                                 json_resp += """},"schedules":{"1":{"time":"2012-10-29T12:00:00","description":"","name":"schedule","command":{"body":{"on":true,"xy":null,"bri":null,"transitiontime":null},"address":"/api/newdeveloper/groups/0/action","method":"PUT"}}},"config":{"portalservices":false,"gateway":"%s","mac":"%s","swversion":"01005215","linkbutton":false,"ipaddress":"%s:%s","proxyport":0,"swupdate":{"text":"","notify":false,"updatestate":0,"url":""},"netmask":"255.255.255.0","name":"Philips hue","dhcp":true,"proxyaddress":"","whitelist":{"newdeveloper":{"name":"test user","last use date":"2015-02-04T21:35:18","create date":"2012-10-29T12:00:00"}},"UTC":"2012-10-29T12:05:00"},"groups":{"1":{"name":"Group 1","action":{"on":true,"bri":254,"hue":33536,"sat":144,"xy":[0.346,0.3568],"ct":201,"alert":null,"effect":"none","colormode":"xy","reachable":null},"lights":["1","2"]}},"scenes":{}}\n""" % (CONFIG.standard['GATEWAYIP'], CONFIG.standard['MACADDRESS'], CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'])
                                 self.send_json(json_resp)
-                                L.info("hueUpnp: {} Sent HTTP New Dev Response".format(client))
+                                self.info(client,"Sent HTTP New Dev Response".format(client))
 
                 #I only saw a POST when registering the username
                 # Previously was "POST /api/ but Google Home doesn't have the trailing slash?
-                elif "POST /api" in data:
+                elif bytes("POST /api",'UTF8') in data:
                         # Google Home seems to make multiple requests, so if we already gave one?
                         if client in username:
                                 resp = "HTTP/1.1 404 Not Found"
-                                L.info("hueUpnp: {} Already assigned user {} Sent: {}".format(client,username[client],resp))
-                                self.request.sendall(resp)
+                                self.info(client,"Already assigned user {} Sent: {}".format(username[client],resp))
+                                self.request.sendall(resp.encode('utf-8'))
                         else:
                                 username[client] = str(uuid.uuid4())
                                 self.send_json(NEWDEVELOPERSYNC_JSON % ("username",username[client]))
-                                L.info("hueUpnp: {} Sent HTTP New Dev Sync Response".format(client))
+                                self.info(client,"Sent HTTP New Dev Sync Response for new user {}".format(username[client]))
 
                 else:
                         resp = "HTTP/1.1 404 Not Found"
-                        L.info("hueUpnp: {} Sent: {}".format(client,resp))
-                        self.request.sendall(resp)
+                        self.debug(client,"Unknown command, Sent {}".format(client,resp))
+                        self.request.sendall(resp.encode('utf-8'))
 
                 self.debug(client,"hueUpnp: -------------------------------")
                 self.debug(client,"hueUpnp:     ")
@@ -469,14 +488,17 @@ class HttpdRequestHandler(SocketServer.BaseRequestHandler ):
         def get_onelight_json(self,device):
                 #example template values: "on", "[0.0,0.0]", "Hue Lamp 1", "254", "201"
                 # on, bri, xy, ct, name
-                json_resp = """{"state":{"on":%s,"bri":%s,"hue":4444,"sat":254,"xy":%s,"ct":%s,"alert":"none","effect":"none","colormode":"hs","reachable":true},"type":"Extended color light","name":"%s","modelid":"LCT001","swversion":"65003148","pointsymbol":{}}"""
-                return json_resp % (device.on, device.bri, device.xy, device.ct, device.name)
+                if device.xy is False:
+                    json_resp = """{"state":{"on":%s,"bri":%s,"hue":4444,"sat":254,"xy":%s,"ct":%s,"alert":"none","effect":"none","colormode":"hs","reachable":true},"type":"Extended color light","name":"%s","modelid":"LCT001","swversion":"65003148","pointsymbol":{}}"""
+                else:
+                    json_resp = """{"state":{"on":%s,"bri":%s,"reachable":true},"type":"Dimmable light","name":"%s","modelid":"LCT001","swversion":"65003148","pointsymbol":{}}"""
+                return json_resp % (device.on, device.bri, device.name)
 
         def send_json(self,resp):
                 date_str = email.utils.formatdate(timeval=None, localtime=False, usegmt=True)
                 full_resp = (JSON_HEADERS % (len(resp), date_str, resp)).replace("\n", "\r\n")
-                self.request.sendall(full_resp)
-                self.debug(self.client_address[0],"hueUpnp: {} Sent HTTP Put Response:\n{}".format(self.client_address[0],full_resp))
+                self.request.sendall(full_resp.encode('utf-8'))
+                self.debug(self.client_address[0],"Sent HTTP Put Response:\n{}".format(full_resp))
 
 #
 # This is the main object which all other handlers inherit from:
@@ -521,7 +543,7 @@ class hue_upnp_super_handler(object):
                                 if ret:
                                         self.on = "false"
                 else:
-                        L.error("ERROR: Unknown set data: " + data)
+                        L.error("ERROR: Unknown set data: " + str(data))
                 return ret
 
         # Default, should always be overridden
@@ -647,7 +669,7 @@ class hue_upnp(object):
                 CONFIG.standard['BRIDGEID'] = "001788FFFE09A206"
                 CONFIG.standard['SERIALNO'] = "00178809A206"
                 # Put our info in the responses
-                UPNP_BROADCAST  = UPNP_BROADCAST.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'],CONFIG.standard['SERIALNO'])
+                UPNP_BROADCAST  = UPNP_BROADCAST.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'],CONFIG.standard['BRIDGEID'],CONFIG.standard['SERIALNO'],CONFIG.standard['SERIALNO'])
                 DESCRIPTION_XML = DESCRIPTION_XML.format(CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'], CONFIG.standard['IP'], CONFIG.standard['SERIALNO'], CONFIG.standard['SERIALNO'])
                 APICONFIG_JSON  = APICONFIG_JSON % (CONFIG.standard['MACADDRESS'])
                 self.httpd = Httpd()
@@ -675,16 +697,18 @@ class hue_upnp(object):
                         self.httpd.stop()
 
         def start_listener(self):
+                L.info("hueUpnp: starting listener")
                 self.responder = Responder()
                 self.broadcaster = Broadcaster()
                 self.responder.start()
                 self.broadcaster.start()
 
         def stop_listener(self):
+                L.info("hueUpnp: stopping listener")
                 self.responder.stop()
                 self.broadcaster.stop()
 
-                
+
 if __name__ == '__main__':
 
         import hueUpnp_config
@@ -721,7 +745,7 @@ if __name__ == '__main__':
                devices.append(isy_rest_handler(key, (hueUpnp_config.devices[key])[1]))
             else:
                 L.error("hueUpnp: Unknown device type specified in the config")
-                thread.interrupt_main()  #exiting program
+                _thread.interrupt_main()  #exiting program
         hueUpnp_config.devices = devices
         hueUpnp_config.logger  = logger
 
