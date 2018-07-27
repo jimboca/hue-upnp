@@ -300,6 +300,9 @@ class Httpd(Thread):
                 self.server.shutdown()
 
 class HttpdRequestHandler(socketserver.BaseRequestHandler ):
+
+        last_all_response = {}
+
         def debug(self,client,str):
                 #if (client == "192.168.1.151"):
                 L.debug('hueUpnp:HTTP: {}: {}'.format(client,str))
@@ -352,14 +355,25 @@ class HttpdRequestHandler(socketserver.BaseRequestHandler ):
                         resp = "\n{"
                         i = 1
                         for device in CONFIG.devices:
+                            if device is not False:
                                 resp += "\"%d\":" % (i)
                                 resp += self.get_onelight_json(device)
                                 if i < len(CONFIG.devices):
                                         resp += ","
                                 i += 1
                         resp += "}\n"
-                        self.send_json(resp)
-                        self.info(client,"Sent all lights response")
+                        client = str(client)
+                        if client in self.last_all_response:
+                            if self.last_all_response[client] == resp:
+                                self.debug(client,"Not sending same lights response")
+                            else:
+                                self.last_all_response[client] = resp
+                                self.send_json(resp)
+                                self.info(client,"Sent updated all lights response")
+                        else:
+                            self.last_all_response[client] = resp
+                            self.send_json(resp)
+                            self.info(client,"Sent first all lights response")
 
                 #PUT instruction to do something
                 #Example (hue3-light-off):
@@ -409,11 +423,16 @@ class HttpdRequestHandler(socketserver.BaseRequestHandler ):
                                 deviceNum = int(reqHueNo) - 1
                                 # TODO: Check that device number is valid.
                                 self.debug(client,"device number:%d" % deviceNum)
-                                dst = CONFIG.devices[deviceNum].set(parsedContent)
-                                # Build the proper response
-                                if dst:
-                                        respStatus = "success"
+                                device = CONFIG.devices[deviceNum]
+                                if device is False:
+                                    L.error("ERROR: Device " + str(deviceNum) + " is not configured, skipping...")
+                                    respStatus = "error"
                                 else:
+                                    dst = device.set(parsedContent)
+                                    # Build the proper response
+                                    if dst:
+                                        respStatus = "success"
+                                    else:
                                         # TODO: Should send the error type:
                                         # TODO: http://www.developers.meethue.com/documentation/error-messages
                                         respStatus = "error"
@@ -453,6 +472,7 @@ class HttpdRequestHandler(socketserver.BaseRequestHandler ):
                                 i = 1
                                 device_json = ()
                                 for device in CONFIG.devices:
+                                    if device is not False:
                                         json_resp += """"%d":""" % (i)
                                         #dst = device.st()
                                         json_resp += self.get_onelight_json(device)
