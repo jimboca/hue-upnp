@@ -361,7 +361,6 @@ class HttpdRequestHandler(socketserver.BaseRequestHandler ):
                                 i += 1
                         resp += "}\n"
                         client = str(client)
-                        self.last_all_response[client] = resp
                         self.send_json(resp)
                         self.info(client,"Sent all lights response")
 
