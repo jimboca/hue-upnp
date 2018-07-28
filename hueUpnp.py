@@ -301,8 +301,6 @@ class Httpd(Thread):
 
 class HttpdRequestHandler(socketserver.BaseRequestHandler ):
 
-        last_all_response = {}
-
         def debug(self,client,str):
                 #if (client == "192.168.1.151"):
                 L.debug('hueUpnp:HTTP: {}: {}'.format(client,str))
@@ -363,17 +361,9 @@ class HttpdRequestHandler(socketserver.BaseRequestHandler ):
                                 i += 1
                         resp += "}\n"
                         client = str(client)
-                        if client in self.last_all_response:
-                            if self.last_all_response[client] == resp:
-                                self.debug(client,"Not sending same lights response")
-                            else:
-                                self.last_all_response[client] = resp
-                                self.send_json(resp)
-                                self.info(client,"Sent updated all lights response")
-                        else:
-                            self.last_all_response[client] = resp
-                            self.send_json(resp)
-                            self.info(client,"Sent first all lights response")
+                        self.last_all_response[client] = resp
+                        self.send_json(resp)
+                        self.info(client,"Sent all lights response")
 
                 #PUT instruction to do something
                 #Example (hue3-light-off):
