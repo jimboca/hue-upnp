@@ -358,7 +358,7 @@ class HttpdRequestHandler(socketserver.BaseRequestHandler ):
                                 resp += self.get_onelight_json(device)
                                 if i < len(CONFIG.devices):
                                         resp += ","
-                                i += 1
+                            i += 1
                         resp += "}\n"
                         client = str(client)
                         self.send_json(resp)
@@ -467,7 +467,7 @@ class HttpdRequestHandler(socketserver.BaseRequestHandler ):
                                         json_resp += self.get_onelight_json(device)
                                         if i < len(CONFIG.devices):
                                                 json_resp += ","
-                                        i += 1
+                                    i += 1
 
                                 json_resp += """},"schedules":{"1":{"time":"2012-10-29T12:00:00","description":"","name":"schedule","command":{"body":{"on":true,"xy":null,"bri":null,"transitiontime":null},"address":"/api/newdeveloper/groups/0/action","method":"PUT"}}},"config":{"portalservices":false,"gateway":"%s","mac":"%s","swversion":"01005215","linkbutton":false,"ipaddress":"%s:%s","proxyport":0,"swupdate":{"text":"","notify":false,"updatestate":0,"url":""},"netmask":"255.255.255.0","name":"Philips hue","dhcp":true,"proxyaddress":"","whitelist":{"newdeveloper":{"name":"test user","last use date":"2015-02-04T21:35:18","create date":"2012-10-29T12:00:00"}},"UTC":"2012-10-29T12:05:00"},"groups":{"1":{"name":"Group 1","action":{"on":true,"bri":254,"hue":33536,"sat":144,"xy":[0.346,0.3568],"ct":201,"alert":null,"effect":"none","colormode":"xy","reachable":null},"lights":["1","2"]}},"scenes":{}}\n""" % (CONFIG.standard['GATEWAYIP'], CONFIG.standard['MACADDRESS'], CONFIG.standard['IP'], CONFIG.standard['HTTP_PORT'])
                                 self.send_json(json_resp)
