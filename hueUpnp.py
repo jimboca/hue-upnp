@@ -714,7 +714,7 @@ class hue_upnp(object):
 
         def stop_listener(self):
                 L.info("hueUpnp: stopping listener")
-                if self.reponder is False:
+                if self.responder is False:
                          L.error("Listener is not running?")
                          return
                 self.responder.stop()
