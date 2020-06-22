@@ -15,7 +15,7 @@ import json
 
 username = {}
 
-L = False
+LOGGER = logging.getLogger(__name__)
 
 M_SEARCH_REQ_MATCH = "M-SEARCH"
 
@@ -670,7 +670,6 @@ class isy_rest_handler(hue_upnp_super_handler):
 class hue_upnp(object):
         def __init__(self, config):
                 global L,CONFIG,UPNP_BROADCAST,DESCRIPTION_XML,APICONFIG_JSON
-                L      = config.logger
                 L.info("hueUpnp: Server initializing")
                 CONFIG = config
                 CONFIG.standard['SERIALNO'] = re.sub(':','',CONFIG.standard['MACADDRESS']) # same as the MACADDRESS with colons removed
@@ -732,16 +731,14 @@ if __name__ == '__main__':
 
         #Setup Logging Output
         logFormatter = logging.Formatter("%(asctime)s [%(levelname)-5.5s] %(message)s")
-        logger = logging.getLogger()
         if debug is True:
-                logger.setLevel(logging.DEBUG)
+                L.setLevel(logging.DEBUG)
         else:
-                logger.setLevel(logging.INFO)
+                L.setLevel(logging.INFO)
 
         consoleHandler = logging.StreamHandler(sys.stdout)
         consoleHandler.setFormatter(logFormatter)
-        logger.addHandler(consoleHandler)
-        L = logger
+        L.addHandler(consoleHandler)
 
         ISY_IP       = hueUpnp_config.isy['ip']
         ISY_USERNAME = hueUpnp_config.isy['username']
