@@ -15,7 +15,7 @@ import json
 
 username = {}
 
-LOGGER = logging.getLogger(__name__)
+L = logging.getLogger(__name__)
 
 M_SEARCH_REQ_MATCH = "M-SEARCH"
 
