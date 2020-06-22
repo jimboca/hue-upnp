@@ -650,12 +650,15 @@ class isy_rest_handler(hue_upnp_super_handler):
                 return (r.status_code == 200)
 
         def set_on(self):
+                L.info('set_on: ' + self.address)
                 return self.do_rest(self.on_cmd)
 
         def set_off(self):
+                L.info('set_off: ' + self.address)
                 return self.do_rest(self.off_cmd)
 
         def set_bri(self,value):
+                L.info('set_bri: ' + self.address + "=" + str(value))
                 cmd = self.on_cmd + "/" + str(value)
                 return self.do_rest(cmd)
 
